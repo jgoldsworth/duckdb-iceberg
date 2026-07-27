@@ -1,0 +1,64 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/delete_manifest_partition_pruning.test
+# description: A single-partition scan reads delete manifests whose partition summaries provably cannot match
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.delete_manifest_partition_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.delete_manifest_partition_pruning (
+    id BIGINT, event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.delete_manifest_partition_pruning
+SELECT range % 100, DATE '2026-07-13' + (range // 100)::INTEGER FROM range(200);
+
+# Pruning is per manifest, so each DELETE is its own snapshot and contributes a manifest whose
+# partition summary covers only the day it touched. One DELETE spanning all days would write a
+# single manifest matching everything, leaving nothing to prune.
+statement ok
+DELETE FROM my_datalake.default.delete_manifest_partition_pruning WHERE event_date = DATE '2026-07-13' AND id = 0;
+
+statement ok
+DELETE FROM my_datalake.default.delete_manifest_partition_pruning WHERE event_date = DATE '2026-07-14' AND id = 0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+select count(*) from my_datalake.default.delete_manifest_partition_pruning where event_date = DATE '2026-07-14';
+----
+99
+
+# Only 2026-07-14's delete manifest can match that filter; 2026-07-13's covers an excluded day.
+query I
+SELECT count(*) FROM duckdb_logs
+WHERE message LIKE '%delete_manifest_scan_started selected_delete_manifests=1 total_delete_manifests=2%';
+----
+1
+
+statement ok
+CALL disable_logging();
+
+# 2 day-partitions of 100 rows, one row deleted per day. A wrongly pruned manifest shows up here.
+query I
+select count(*) from my_datalake.default.delete_manifest_partition_pruning;
+----
+198
+
+statement ok
+drop table my_datalake.default.delete_manifest_partition_pruning;

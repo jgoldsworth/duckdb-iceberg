@@ -1,0 +1,85 @@
+# name: benchmark/file_pruning_benchmarks/prune_delete_manifests_from_unread_partitions.benchmark
+# description: Single-day scan of a day-partitioned merge-on-read table whose other partitions each contributed a separate delete manifest
+# group: [file_pruning_benchmarks]
+
+name Prune delete manifests from unread partitions
+group file_pruning_benchmarks
+subgroup delete_manifests
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# 30 day-partitions, then one merge-on-read DELETE per day. Each DELETE commits its own snapshot,
+# so each contributes a delete manifest whose partition summary covers only that day. Pruning is
+# per manifest, so the per-day DELETEs matter: one DELETE spanning all days would write a single
+# manifest matching everything and there would be nothing to prune.
+#
+# The timed query touches one day-partition. Without partition-based pruning all 30 manifests are
+# fetched and parsed before the scan can discard their entries.
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.prune_delete_manifests;
+CREATE TABLE my_datalake.default.prune_delete_manifests (
+    id BIGINT,
+    event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.prune_delete_manifests
+SELECT range % 1000, DATE '2024-01-01' + (range // 1000)::INTEGER FROM range(30000);
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-01' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-02' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-03' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-04' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-05' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-06' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-07' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-08' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-09' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-10' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-11' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-12' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-13' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-14' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-15' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-16' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-17' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-18' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-19' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-20' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-21' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-22' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-23' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-24' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-25' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-26' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-27' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-28' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-29' AND id = 0;
+DELETE FROM my_datalake.default.prune_delete_manifests WHERE event_date = DATE '2024-01-30' AND id = 0;
+
+run
+SELECT count(*)
+FROM my_datalake.default.prune_delete_manifests
+WHERE event_date = DATE '2024-01-01';
+
+result I
+999

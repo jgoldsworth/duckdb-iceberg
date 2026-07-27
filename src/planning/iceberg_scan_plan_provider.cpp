@@ -156,16 +156,19 @@ void ClientSideScanPlanProvider::StartDeleteManifestScan(const IcebergMultiFileL
 	if (shared_state.delete_manifest_scan || DeleteManifests().empty()) {
 		return;
 	}
-	//! Only read the delete manifests whose partition summaries can match the scan's filters, mirroring
-	//! StartDataManifestScan. A delete file only applies to data files in its own partition, so a manifest
-	//! pruned here cannot affect any data file that is still in scope. Manifests without field summaries
-	//! are never pruned by ManifestMatchesFilter, so global (unpartitioned) deletes are unaffected.
+	//! A delete file only applies to data files in its own partition, so a manifest whose partition
+	//! summary cannot match the filters has nothing to contribute. ManifestMatchesFilter never prunes a
+	//! manifest without field summaries, leaving global (unpartitioned) deletes untouched.
 	vector<idx_t> selected_delete_manifests;
 	for (idx_t manifest_idx = 0; manifest_idx < DeleteManifests().size(); manifest_idx++) {
 		if (file_list.delete_manifest_matches[manifest_idx]) {
 			selected_delete_manifests.push_back(manifest_idx);
 		}
 	}
+	DUCKDB_LOG(shared_state.context, IcebergLogType,
+	           "Iceberg metadata phase=delete_manifest_scan_started selected_delete_manifests=%llu "
+	           "total_delete_manifests=%llu",
+	           selected_delete_manifests.size(), DeleteManifests().size());
 	if (selected_delete_manifests.empty()) {
 		return;
 	}
