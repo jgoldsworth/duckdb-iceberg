@@ -156,9 +156,22 @@ void ClientSideScanPlanProvider::StartDeleteManifestScan(const IcebergMultiFileL
 	if (shared_state.delete_manifest_scan || DeleteManifests().empty()) {
 		return;
 	}
-	shared_state.delete_manifest_scan =
-	    AvroScan::ScanManifest(file_list.GetSnapshot(), DeleteManifests(), file_list.options, shared_state.fs,
-	                           file_list.GetPath(), file_list.GetMetadata(), shared_state.context);
+	//! Only read the delete manifests whose partition summaries can match the scan's filters, mirroring
+	//! StartDataManifestScan. A delete file only applies to data files in its own partition, so a manifest
+	//! pruned here cannot affect any data file that is still in scope. Manifests without field summaries
+	//! are never pruned by ManifestMatchesFilter, so global (unpartitioned) deletes are unaffected.
+	vector<idx_t> selected_delete_manifests;
+	for (idx_t manifest_idx = 0; manifest_idx < DeleteManifests().size(); manifest_idx++) {
+		if (file_list.delete_manifest_matches[manifest_idx]) {
+			selected_delete_manifests.push_back(manifest_idx);
+		}
+	}
+	if (selected_delete_manifests.empty()) {
+		return;
+	}
+	shared_state.delete_manifest_scan = AvroScan::ScanManifest(
+	    file_list.GetSnapshot(), DeleteManifests(), file_list.options, shared_state.fs, file_list.GetPath(),
+	    file_list.GetMetadata(), shared_state.context, nullptr, std::move(selected_delete_manifests));
 	shared_state.delete_manifest_reader = make_uniq<manifest_file::ManifestReader>(*shared_state.delete_manifest_scan);
 }
 
@@ -228,6 +241,10 @@ void ClientSideScanPlanProvider::EnumerateDeleteManifestEntries(const IcebergMul
 
 	for (idx_t i = 0; i < DeleteManifests().size(); i++) {
 		auto &manifest_list_entry = DeleteManifests()[i];
+		//! A manifest pruned from the delete scan was never read, so it has no entries to bind
+		if (!manifest_list_entry.HasManifestEntries()) {
+			continue;
+		}
 		auto manifest = BoundIcebergManifestListEntry(i, manifest_list_entry);
 		for (auto &manifest_entry : manifest_list_entry.GetManifestEntries()) {
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
