@@ -54,6 +54,7 @@ set(EXTENSION_SOURCES
 	src/common/iceberg_default.cpp
 	src/core/deletes/iceberg_deletion_vector.cpp
 	src/core/deletes/iceberg_equality_delete.cpp
+	src/core/deletes/iceberg_equality_delete_filter.cpp
 	src/core/deletes/iceberg_positional_delete.cpp
 	src/core/expression/iceberg_hash.cpp
 	src/core/expression/iceberg_metrics.cpp

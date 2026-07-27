@@ -20,6 +20,7 @@
 
 #include "planning/iceberg_multi_file_list.hpp"
 #include "common/iceberg_utils.hpp"
+#include "core/deletes/iceberg_equality_delete_filter.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
 namespace duckdb {
@@ -44,16 +45,16 @@ public:
 		}
 	}
 
-	void CacheEqualityDeleteExpression(idx_t file_list_idx, unique_ptr<Expression> expression) {
-		lock_guard<mutex> guard(equality_delete_expression_lock);
-		equality_delete_expressions.emplace(file_list_idx, std::move(expression));
+	void CacheEqualityDeleteFilter(idx_t file_list_idx, unique_ptr<const IcebergEqualityDeleteFilter> filter) {
+		lock_guard<mutex> guard(equality_delete_filter_lock);
+		equality_delete_filters.emplace(file_list_idx, std::move(filter));
 	}
 
-	optional_ptr<const Expression> GetEqualityDeleteExpression(idx_t file_list_idx) const {
-		lock_guard<mutex> guard(equality_delete_expression_lock);
-		auto entry = equality_delete_expressions.find(file_list_idx);
-		if (entry == equality_delete_expressions.end()) {
-			throw InternalException("Equality-delete expression was not initialized for file-list index %llu",
+	optional_ptr<const IcebergEqualityDeleteFilter> GetEqualityDeleteFilter(idx_t file_list_idx) const {
+		lock_guard<mutex> guard(equality_delete_filter_lock);
+		auto entry = equality_delete_filters.find(file_list_idx);
+		if (entry == equality_delete_filters.end()) {
+			throw InternalException("Equality-delete filter was not initialized for file-list index %llu",
 			                        file_list_idx);
 		}
 		return entry->second.get();
@@ -68,8 +69,8 @@ public:
 	unordered_map<int32_t, idx_t> equality_delete_field_indexes;
 
 private:
-	mutable mutex equality_delete_expression_lock;
-	unordered_map<idx_t, unique_ptr<Expression>> equality_delete_expressions;
+	mutable mutex equality_delete_filter_lock;
+	unordered_map<idx_t, unique_ptr<const IcebergEqualityDeleteFilter>> equality_delete_filters;
 };
 
 struct IcebergMultiFileReader : public MultiFileReader {
@@ -119,10 +120,9 @@ public:
 	                           const LogicalType &type, MultiFileLocalIndex local_idx) override;
 
 private:
-	static unique_ptr<Expression> CreateEqualityDeleteExpression(const IcebergMultiFileList &multi_file_list,
-	                                                             const BoundIcebergManifestEntry &bound_manifest_entry,
-	                                                             const vector<MultiFileColumnDefinition> &local_columns,
-	                                                             const IcebergMultiFileReaderGlobalState &global_state);
+	static unique_ptr<const IcebergEqualityDeleteFilter> CreateEqualityDeleteFilter(
+	    const IcebergMultiFileList &multi_file_list, const BoundIcebergManifestEntry &bound_manifest_entry,
+	    const vector<MultiFileColumnDefinition> &local_columns, const IcebergMultiFileReaderGlobalState &global_state);
 	static void ApplyPartitionConstants(const IcebergMultiFileList &multi_file_list, MultiFileReaderData &reader_data,
 	                                    const vector<MultiFileColumnDefinition> &global_columns,
 	                                    const vector<ColumnIndex> &global_column_ids, ClientContext &context);
