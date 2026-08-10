@@ -29,6 +29,13 @@ public:
 		return entry->second.get();
 	}
 	unique_ptr<ExpressionFilter> GetFilterForColumnIndex(const ColumnIndex &column_index) const;
+	IcebergTableFilters Copy() const {
+		IcebergTableFilters result;
+		for (auto &entry : table_filters) {
+			result.PushFilter(entry.first, entry.second->Copy());
+		}
+		return result;
+	}
 
 	iterator begin() { // NOLINT: match stl API
 		return table_filters.begin();

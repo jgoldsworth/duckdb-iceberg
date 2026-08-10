@@ -78,6 +78,14 @@ static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, 
 	file_list.SetScanOrder(std::move(order_options));
 }
 
+//! Excludes _row_id: it is derived from the surviving file set (#1308), so two scans that prune differently disagree
+static vector<column_t> IcebergGetRowIdColumns(ClientContext &context, optional_ptr<FunctionData> bind_data) {
+	vector<column_t> result;
+	result.emplace_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	result.emplace_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	return result;
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -99,7 +107,8 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 	for (auto &function : parquet_scan_copy.functions) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
-		function.late_materialization = false;
+		function.late_materialization = true;
+		function.get_row_id_columns = IcebergGetRowIdColumns;
 
 		// Unset all of these: they are either broken, very inefficient.
 		// TODO: implement/fix these

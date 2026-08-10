@@ -293,6 +293,34 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 	return PushdownInternal(context, filter_set, info.column_indexes);
 }
 
+unique_ptr<MultiFileList> IcebergMultiFileList::Copy() const {
+	unique_ptr<RowGroupOrderOptions> copied_scan_order;
+	bool server_side_planning;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		copied_scan_order = scan_order.CopyOptions();
+		server_side_planning = shared_state->server_side_planning_enabled;
+	}
+
+	//! Shares the resolved snapshot, but not the plan state: manifest read state is single-shot per scan
+	auto plan_state = make_shared_ptr<IcebergScanPlanState>(context, shared_state->scan_info, shared_state->path,
+	                                                        shared_state->options);
+	plan_state->table = shared_state->table;
+
+	auto result = unique_ptr<IcebergMultiFileList>(new IcebergMultiFileList(std::move(plan_state)));
+	result->table_filters = table_filters.Copy();
+	result->names = names;
+	result->types = types;
+	result->have_bound = have_bound;
+	if (!server_side_planning) {
+		result->DisableServerSidePlanning();
+	}
+	if (copied_scan_order) {
+		result->SetScanOrder(std::move(copied_scan_order));
+	}
+	return result;
+}
+
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 	vector<OpenFileInfo> file_list;
 	//! Lock is required because it reads the 'manifest_entries' vector

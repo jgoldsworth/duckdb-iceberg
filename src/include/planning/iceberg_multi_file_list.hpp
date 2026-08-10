@@ -51,6 +51,7 @@ public:
 	FileExpandResult GetExpandResult() const override;
 	idx_t GetTotalFileCount() const override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
+	unique_ptr<MultiFileList> Copy() const override;
 	OpenFileInfo GetFile(idx_t i) const override;
 
 public:

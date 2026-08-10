@@ -1,0 +1,104 @@
+# name: test/sql/local/late_materialization.test
+# description: Late materialization of iceberg_scan via a row-id semi join
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+SET explain_output='optimized_only';
+
+# a top-n over a wide projection turns into a row-id join
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id LIMIT 3;
+----
+logical_opt	<REGEX>:.*COMPARISON_JOIN.*
+
+# the row id is (filename, file_row_number)
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id LIMIT 3;
+----
+logical_opt	<REGEX>:.*file_row_number.*
+
+# _row_id is derived from the surviving file set, so it must not be used to join the two scans
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id LIMIT 3;
+----
+logical_opt	<!REGEX>:.*_row_id.*
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id LIMIT 3;
+----
+1	NULL
+2	NULL
+3	NULL
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id DESC LIMIT 3;
+----
+8	blah
+7	NULL
+6	baz
+
+# no columns can be deferred, so the rewrite does not apply
+query II
+EXPLAIN SELECT id FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') ORDER BY id LIMIT 3;
+----
+logical_opt	<!REGEX>:.*COMPARISON_JOIN.*
+
+# the projected column is already required by the pushed-down filter
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') WHERE value IS NOT NULL ORDER BY id LIMIT 3;
+----
+logical_opt	<!REGEX>:.*COMPARISON_JOIN.*
+
+query II
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/is_null_is_not_null') WHERE value IS NOT NULL ORDER BY id LIMIT 3;
+----
+4	foo
+5	bar
+6	baz
+
+# partition constants are only produced by the iceberg reader, so the deferred columns prove the copied
+# bind data kept it
+query III
+SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/hive_partitioned_table') ORDER BY user_id LIMIT 3;
+----
+2024-01-01	12345	click
+2024-01-03	13579	view
+2024-01-03	24680	click
+
+# positional deletes still apply to the rows fetched by the join
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', allow_moved_paths=true) ORDER BY l_orderkey, l_linenumber LIMIT 5;
+----
+logical_opt	<REGEX>:.*COMPARISON_JOIN.*
+
+query III
+SELECT sum(l_orderkey), sum(l_linenumber), count(*) FROM (
+	SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/iceberg/lineitem_iceberg', allow_moved_paths=true)
+	ORDER BY l_orderkey, l_linenumber LIMIT 5
+);
+----
+5	15	5
+
+# limit with an offset
+query II
+EXPLAIN SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/partition_decimal_hugeint') LIMIT 3 OFFSET 5;
+----
+logical_opt	<REGEX>:.*COMPARISON_JOIN.*
+
+query I
+SELECT count(*) FROM (
+	SELECT * FROM iceberg_scan('__WORKING_DIRECTORY__/data/persistent/partition_decimal_hugeint') LIMIT 3 OFFSET 5
+);
+----
+3
