@@ -619,6 +619,9 @@ class CPPClass:
         condition = ' && '.join(all_options)
 
         for item in self.any_of:
+            json_type_check = self.primitive_json_type_check(item.class_name, 'obj')
+            if json_type_check:
+                res.append(f'if ({json_type_check}) {{')
             is_recursive = item.class_name in self.parse_info.recursive_schemas
             if is_recursive:
                 res.append(f'{item.name} = make_uniq<{item.class_name}>();')
@@ -633,6 +636,8 @@ class CPPClass:
                     '}',
                 ]
             )
+            if json_type_check:
+                res.append('}')
 
         res.extend(
             [
@@ -642,6 +647,20 @@ class CPPClass:
             ]
         )
         return res
+
+    def primitive_json_type_check(self, class_name: str, source: str) -> Optional[str]:
+        schema = self.parse_info.parsed_schemas.get(class_name)
+        if schema is None or schema.type != Property.Type.PRIMITIVE:
+            return None
+        primitive_property = cast(PrimitiveProperty, schema)
+        type_mapping = PRIMITIVE_TYPE_MAPPING[primitive_property.primitive_type]
+        checks = [f'{type_mapping.type_check}({source})']
+        if type_mapping.formats and primitive_property.format in type_mapping.formats:
+            specific_mapping = type_mapping.formats[primitive_property.format]
+            checks = [f'{specific_mapping.type_check}({source})', f'json_utils::IsUnsignedInteger({source})']
+        if primitive_property.nullable is True and primitive_property.primitive_type is not None:
+            checks.insert(0, f'{source}.IsNull()')
+        return ' || '.join(checks)
 
     def write_nested_classes_header(self) -> List[str]:
         if not self.nested_classes:

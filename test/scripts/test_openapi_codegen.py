@@ -84,9 +84,10 @@ def test_overlapping_primitive_one_of_keeps_all_matching_views():
 
     assert not cpp_class.one_of
     assert len(cpp_class.any_of) == 17
-    assert "integer_type_value.emplace()" in source
-    assert "long_type_value.emplace()" in source
-    assert "string_type_value.emplace()" in source
+    assert "if (json_utils::IsNull(obj)) {\nnull_type_value.emplace()" in source
+    assert "if (json_utils::IsInteger(obj)) {\ninteger_type_value.emplace()" in source
+    assert "json_utils::IsUnsignedInteger(obj)) {\nlong_type_value.emplace()" in source
+    assert "if (json_utils::IsString(obj)) {\nstring_type_value.emplace()" in source
 
 
 def test_expression_accepts_canonical_boolean_constants():

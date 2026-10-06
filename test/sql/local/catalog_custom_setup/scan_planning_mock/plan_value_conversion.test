@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_custom_setup/scan_planning_mock/plan_value_conversion.test
+# description: Null, binary and typed values in a server-side scan plan convert by their Iceberg type
+# group: [scan_planning_mock]
+
+# Requires: python3 scripts/scan_planning_mock_server.py 19131
+require-env SCAN_PLANNING_MOCK_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+statement ok
+ATTACH '' AS mock (TYPE ICEBERG, URI 'http://127.0.0.1:19131', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+query TIIITT
+select file_path, partition_constants."1", partition_constants."2", typeof(partition_constants."2"),
+	partition_constants."3", partition_constants."4"
+from iceberg_scan_plan('mock.default.typed') order by file_path;
+----
+/scan-planning-mock/typed_a.parquet	1234	10000000000	BIGINT	2024-03-01	1234
+/scan-planning-mock/typed_b.parquet	NULL	NULL	BIGINT	NULL	NULL
+
+# The data files do not exist, so these scans only succeed when the bounds prune every file.
+query I
+select count(*) from mock.default.typed where v = 25;
+----
+0
+
+query T
+select file_path from iceberg_scan_plan('mock.default.typed', row_filter := 'v between 30 and 40');
+----
+/scan-planning-mock/typed_b.parquet
+
+# A null bound cannot prune its file.
+query T
+select file_path from iceberg_scan_plan('mock.default.typed', row_filter := 'n = 100');
+----
+/scan-planning-mock/typed_a.parquet
+
+query T
+select file_path from iceberg_scan_plan('mock.default.typed', row_filter := 'b = ''\xCA\xFE''::BLOB');
+----
+/scan-planning-mock/typed_a.parquet
+
+query T
+select file_path from iceberg_scan_plan('mock.default.typed', row_filter := 'i = 1234 and d = ''2024-03-01''');
+----
+/scan-planning-mock/typed_a.parquet

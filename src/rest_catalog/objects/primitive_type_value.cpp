@@ -97,107 +97,141 @@ PrimitiveTypeValue PrimitiveTypeValue::Copy() const {
 
 string PrimitiveTypeValue::TryFromJSON(JSONValue obj) {
 	string error;
-	null_type_value.emplace();
-	error = null_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		null_type_value = nullopt;
+	if (json_utils::IsNull(obj)) {
+		null_type_value.emplace();
+		error = null_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			null_type_value = nullopt;
+		}
 	}
-	boolean_type_value.emplace();
-	error = boolean_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		boolean_type_value = nullopt;
+	if (json_utils::IsBoolean(obj)) {
+		boolean_type_value.emplace();
+		error = boolean_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			boolean_type_value = nullopt;
+		}
 	}
-	integer_type_value.emplace();
-	error = integer_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		integer_type_value = nullopt;
+	if (json_utils::IsInteger(obj)) {
+		integer_type_value.emplace();
+		error = integer_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			integer_type_value = nullopt;
+		}
 	}
-	long_type_value.emplace();
-	error = long_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		long_type_value = nullopt;
+	if (json_utils::IsInteger(obj) || json_utils::IsUnsignedInteger(obj)) {
+		long_type_value.emplace();
+		error = long_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			long_type_value = nullopt;
+		}
 	}
-	float_type_value.emplace();
-	error = float_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		float_type_value = nullopt;
+	if (json_utils::IsNumber(obj)) {
+		float_type_value.emplace();
+		error = float_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			float_type_value = nullopt;
+		}
 	}
-	double_type_value.emplace();
-	error = double_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		double_type_value = nullopt;
+	if (json_utils::IsNumber(obj)) {
+		double_type_value.emplace();
+		error = double_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			double_type_value = nullopt;
+		}
 	}
-	decimal_type_value.emplace();
-	error = decimal_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		decimal_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		decimal_type_value.emplace();
+		error = decimal_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			decimal_type_value = nullopt;
+		}
 	}
-	string_type_value.emplace();
-	error = string_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		string_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		string_type_value.emplace();
+		error = string_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			string_type_value = nullopt;
+		}
 	}
-	uuidtype_value.emplace();
-	error = uuidtype_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		uuidtype_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		uuidtype_value.emplace();
+		error = uuidtype_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			uuidtype_value = nullopt;
+		}
 	}
-	date_type_value.emplace();
-	error = date_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		date_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		date_type_value.emplace();
+		error = date_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			date_type_value = nullopt;
+		}
 	}
-	time_type_value.emplace();
-	error = time_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		time_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		time_type_value.emplace();
+		error = time_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			time_type_value = nullopt;
+		}
 	}
-	timestamp_type_value.emplace();
-	error = timestamp_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		timestamp_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		timestamp_type_value.emplace();
+		error = timestamp_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			timestamp_type_value = nullopt;
+		}
 	}
-	timestamp_tz_type_value.emplace();
-	error = timestamp_tz_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		timestamp_tz_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		timestamp_tz_type_value.emplace();
+		error = timestamp_tz_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			timestamp_tz_type_value = nullopt;
+		}
 	}
-	timestamp_nano_type_value.emplace();
-	error = timestamp_nano_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		timestamp_nano_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		timestamp_nano_type_value.emplace();
+		error = timestamp_nano_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			timestamp_nano_type_value = nullopt;
+		}
 	}
-	timestamp_tz_nano_type_value.emplace();
-	error = timestamp_tz_nano_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		timestamp_tz_nano_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		timestamp_tz_nano_type_value.emplace();
+		error = timestamp_tz_nano_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			timestamp_tz_nano_type_value = nullopt;
+		}
 	}
-	fixed_type_value.emplace();
-	error = fixed_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		fixed_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		fixed_type_value.emplace();
+		error = fixed_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			fixed_type_value = nullopt;
+		}
 	}
-	binary_type_value.emplace();
-	error = binary_type_value->TryFromJSON(obj);
-	if (error.empty()) {
-	} else {
-		binary_type_value = nullopt;
+	if (json_utils::IsString(obj)) {
+		binary_type_value.emplace();
+		error = binary_type_value->TryFromJSON(obj);
+		if (error.empty()) {
+		} else {
+			binary_type_value = nullopt;
+		}
 	}
 	if (!(binary_type_value.has_value()) && !(boolean_type_value.has_value()) && !(date_type_value.has_value()) &&
 	    !(decimal_type_value.has_value()) && !(double_type_value.has_value()) && !(fixed_type_value.has_value()) &&
