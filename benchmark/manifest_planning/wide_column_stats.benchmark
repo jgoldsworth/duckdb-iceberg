@@ -1,0 +1,20 @@
+# name: benchmark/manifest_planning/wide_column_stats.benchmark
+# description: Plan a scan over 8,192 data files in 8 manifests with stats on 128 columns, pruning every file
+# group: [manifest_planning]
+
+name Scan planning - 8192 files with stats on 128 columns
+group manifest_planning
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Requires the table from scripts/generate_wide_column_stats_table.py. Its data files do not exist: the
+# filter prunes every file on the bounds of c002, so the timed query decodes manifest entries and opens nothing.
+run
+SELECT count(*) FROM iceberg_scan('data/generated/wide_column_stats') WHERE c002 < 0;
+
+result I
+0

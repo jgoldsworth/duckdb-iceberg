@@ -188,7 +188,7 @@ void ManifestListReader::ReadChunk(DataChunk &chunk, idx_t table_format_version,
 				} else {
 					summary.upper_bound = Value(LogicalType::BLOB);
 				}
-				summaries.push_back(summary);
+				summaries.push_back(std::move(summary));
 			}
 		}
 		result.push_back(std::move(manifest));

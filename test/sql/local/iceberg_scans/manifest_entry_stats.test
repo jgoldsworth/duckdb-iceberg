@@ -1,0 +1,66 @@
+# name: test/sql/local/iceberg_scans/manifest_entry_stats.test
+# description: Bounds, counts and partition values decoded from manifest entries drive pruning and keep their values
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# user_id is not a partition column: five of the six data files are pruned on their user_id bounds
+query III
+SELECT event_date, event_type, user_id
+FROM iceberg_scan('data/persistent/hive_partitioned_table')
+WHERE user_id = 24680;
+----
+2024-01-03	click	24680
+
+query I
+SELECT regexp_extract(message, 'bounds \[([^\]]*)\]', 1)
+FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+ORDER BY ALL;
+----
+12345, 12345
+13579, 13579
+67890, 67890
+86420, 86420
+97531, 97531
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# event_date is a partition column: the first manifest is pruned on its partition summary, the
+# 2024-01-03 files on their partition values
+query III
+SELECT event_date, event_type, user_id
+FROM iceberg_scan('data/persistent/hive_partitioned_table')
+WHERE event_date = DATE '2024-01-04'
+ORDER BY ALL;
+----
+2024-01-04	purchase	97531
+2024-01-04	view	86420
+
+query II
+SELECT regexp_extract(message, 'skipped ''([a-z_]*)''', 1),
+	regexp_extract(message, '(has raw value [^ ]*|bounds \[[^\]]*\])', 1)
+FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped%'
+ORDER BY ALL;
+----
+data_file	has raw value 2024-01-03
+data_file	has raw value 2024-01-03
+manifest_file	bounds [2024-01-01, 2024-01-02]
+
+query IIIIIIII
+SELECT partition, column_name, lower_bound, upper_bound, column_size, value_count, null_value_count, nan_value_count
+FROM iceberg_column_stats('data/persistent/hive_partitioned_table')
+WHERE file_path LIKE '%event_type=view%'
+ORDER BY ALL;
+----
+{'r0': 2024-01-03, 'r1': view}	event_date	2024-01-03	2024-01-03	36	1	0	NULL
+{'r0': 2024-01-03, 'r1': view}	event_type	view	view	40	1	0	NULL
+{'r0': 2024-01-03, 'r1': view}	user_id	13579	13579	40	1	0	NULL
+{'r0': 2024-01-04, 'r1': view}	event_date	2024-01-04	2024-01-04	36	1	0	NULL
+{'r0': 2024-01-04, 'r1': view}	event_type	view	view	40	1	0	NULL
+{'r0': 2024-01-04, 'r1': view}	user_id	86420	86420	40	1	0	NULL
