@@ -1,0 +1,115 @@
+# name: test/sql/local/iceberg_scans/delete_planning_index.test
+# description: Delete files are matched to data files by partition, spec and sequence number
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# pdel (data/persistent/delete_planning, scripts/persistent/delete_planning.py): identity(part), 8 data files (two per
+# partition), one pair of positional delete files per partition. Live rows: 16, ids 1 2 11 12 21 22 31 32 40 41 50 51
+# 60 61 70 71.
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel');
+----
+[1, 2, 11, 12, 21, 22, 31, 32, 40, 41, 50, 51, 60, 61, 70, 71]
+
+query II
+SELECT part, list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') GROUP BY part ORDER BY part;
+----
+0	[1, 2, 40, 41]
+1	[11, 12, 50, 51]
+2	[21, 22, 60, 61]
+3	[31, 32, 70, 71]
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part = 2;
+----
+[21, 22, 60, 61]
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part IN (1, 3) AND ts >= 400;
+----
+[50, 51, 70, 71]
+
+# Every data file carries exactly the delete files of its own partition, and each delete file lands on exactly the two
+# data files of its partition
+query II
+SELECT count(*), count(DISTINCT delete_path) FROM (
+    SELECT file_path, unnest(delete_files).file_path AS delete_path
+    FROM iceberg_scan_plan('data/persistent/delete_planning/pdel'));
+----
+16	8
+
+query I
+SELECT count(*) FROM (
+    SELECT delete_path, count(DISTINCT partition_constants) AS partitions, count(*) AS data_files FROM (
+        SELECT partition_constants, unnest(delete_files).file_path AS delete_path
+        FROM iceberg_scan_plan('data/persistent/delete_planning/pdel'))
+    GROUP BY delete_path)
+WHERE partitions <> 1 OR data_files <> 2;
+----
+0
+
+# A partition filter prunes the data files but not the delete files each survivor needs
+query II
+SELECT count(*), count(DISTINCT delete_path) FROM (
+    SELECT file_path, unnest(delete_files).file_path AS delete_path
+    FROM iceberg_scan_plan('data/persistent/delete_planning/pdel', row_filter := 'part = 2'));
+----
+4	2
+
+query I
+SELECT count(*) FROM (
+    SELECT unnest(delete_files).file_path AS delete_path
+    FROM iceberg_scan_plan('data/persistent/delete_planning/pdel', row_filter := 'part = 2')
+    EXCEPT
+    SELECT unnest(delete_files).file_path
+    FROM iceberg_scan_plan('data/persistent/delete_planning/pdel') WHERE partition_constants = {'2': 2});
+----
+0
+
+# Equality delete scoped to partition 0 of the same spec: not applied to partition 1
+query I
+SELECT count(*) FROM iceberg_scan_plan('data/persistent/equality_delete_cross_partition/warehouse/ns/t/metadata/vfinal.metadata.json', row_filter := 'part = 1') WHERE len(delete_files) <> 0;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_scan_plan('data/persistent/equality_delete_cross_partition/warehouse/ns/t/metadata/vfinal.metadata.json', row_filter := 'part = 0') WHERE len(delete_files) <> 1;
+----
+0
+
+# equality_global (hand-edited copy of equality_delete_cross_partition): the equality delete (sequence 2, key = 100) is
+# written under an unpartitioned spec, so it applies to every partition. A third data file in partition 1 is newer
+# (sequence 3), so the delete must not apply to it.
+query IIT
+SELECT part, key, val FROM iceberg_scan('data/persistent/delete_planning/equality_global/warehouse/ns/t/metadata/vfinal.metadata.json') ORDER BY ALL;
+----
+0	999	p0-k999
+1	100	p1-k100
+1	888	p1-k888
+1	888	p1-k888
+
+query II
+SELECT regexp_extract(file_path, '[^/]*$'), len(delete_files)
+FROM iceberg_scan_plan('data/persistent/delete_planning/equality_global/warehouse/ns/t/metadata/vfinal.metadata.json')
+ORDER BY ALL;
+----
+00000-0-9867a76c-2dc8-4660-9641-15188ad8ee9b.parquet	1
+00000-1-9867a76c-2dc8-4660-9641-15188ad8ee9b.parquet	1
+00000-2-newer-than-delete.parquet	0
+
+query II
+SELECT regexp_extract(file_path, '[^/]*$'), len(delete_files)
+FROM iceberg_scan_plan('data/persistent/delete_planning/equality_global/warehouse/ns/t/metadata/vfinal.metadata.json', row_filter := 'part = 1')
+ORDER BY ALL;
+----
+00000-1-9867a76c-2dc8-4660-9641-15188ad8ee9b.parquet	1
+00000-2-newer-than-delete.parquet	0
+
+query IIT
+SELECT part, key, val FROM iceberg_scan('data/persistent/delete_planning/equality_global/warehouse/ns/t/metadata/vfinal.metadata.json') WHERE part = 1 ORDER BY ALL;
+----
+1	100	p1-k100
+1	888	p1-k888
+1	888	p1-k888

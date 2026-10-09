@@ -4,6 +4,7 @@
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
+#include "planning/deletes/iceberg_delete_index.hpp"
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
@@ -336,13 +337,29 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 	if (!has_matching_delete_manifests.load()) {
 		return result;
 	}
+	auto &data_file = data_manifest_entry.entry.data_file;
 	vector<idx_t> manifest_indexes;
 	optional_ptr<IcebergScanPlanProvider> provider;
+	int32_t data_spec_id;
 	{
 		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 		InitializeView(guard);
-		manifest_indexes =
-		    IcebergDeletePlanner::GetDeleteManifestsForDataFile(GetDeletePlanningContext(), data_manifest_entry);
+		if (!delete_index) {
+			delete_index = make_uniq<IcebergDeleteIndex>(GetMetadata());
+		}
+		auto &data_manifest = data_manifests[data_manifest_entry.manifest_file_idx].entry.GetManifest();
+		data_spec_id = data_manifest.partition_spec_id;
+		auto data_sequence_number = data_manifest_entry.entry.GetSequenceNumber(data_manifest);
+		auto memo = delete_index->FindManifestCandidates(data_manifest_entry.manifest_file_idx, data_sequence_number,
+		                                                 data_file.partition_info);
+		if (memo) {
+			manifest_indexes = *memo;
+		} else {
+			manifest_indexes =
+			    IcebergDeletePlanner::GetDeleteManifestsForDataFile(GetDeletePlanningContext(), data_manifest_entry);
+			delete_index->StoreManifestCandidates(data_manifest_entry.manifest_file_idx, data_sequence_number,
+			                                      data_file.partition_info, manifest_indexes);
+		}
 		provider = &GetScanPlanProvider();
 	}
 	if (manifest_indexes.empty()) {
@@ -351,8 +368,8 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 	provider->ReadDeleteManifests(manifest_indexes, table_filters.FilterCount());
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	auto delete_context = GetDeletePlanningContext();
-	auto partition_values = IcebergFilePruner::PartitionValueMap(data_manifest_entry.entry.data_file);
-	for (auto delete_file : provider->GetDeleteFiles(manifest_indexes)) {
+	auto partition_values = IcebergFilePruner::PartitionValueMap(data_file);
+	auto get_delete_entry = [&](const IcebergDeleteFileReference &delete_file) -> const IcebergManifestEntry & {
 		if (delete_file.manifest_idx >= delete_manifests.size()) {
 			throw InternalException("Delete manifest index %llu is out of bounds for %llu manifests",
 			                        delete_file.manifest_idx, delete_manifests.size());
@@ -362,13 +379,42 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 			throw InternalException("Delete manifest entry index %llu is out of bounds for manifest %llu",
 			                        delete_file.entry_idx, delete_file.manifest_idx);
 		}
-		auto &delete_entry = entries[delete_file.entry_idx];
-		if (IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry) &&
-		    IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
-		                                                       data_manifest_entry, partition_values)) {
-			result.emplace_back(delete_entry.data_file);
+		return entries[delete_file.entry_idx];
+	};
+	auto unindexed = delete_index->UnindexedManifests(manifest_indexes);
+	if (!unindexed.empty()) {
+		for (auto &delete_file : provider->GetDeleteFiles(unindexed)) {
+			auto &delete_entry = get_delete_entry(delete_file);
+			auto &delete_manifest = delete_manifests[delete_file.manifest_idx].entry.GetManifest();
+			delete_index->AddEntry(delete_file, delete_manifest.partition_spec_id, delete_entry.data_file);
 		}
+		delete_index->MarkIndexed(unindexed);
 	}
+	auto matching_deletes = [&](const vector<IcebergDeleteFileReference> &candidates) {
+		vector<IcebergDeleteFile> matches;
+		for (auto &delete_file : candidates) {
+			auto &delete_entry = get_delete_entry(delete_file);
+			if (IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx,
+			                                                    delete_entry) &&
+			    IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx,
+			                                                       delete_entry, data_manifest_entry,
+			                                                       partition_values)) {
+				matches.emplace_back(delete_entry.data_file);
+			}
+		}
+		return matches;
+	};
+	auto candidates =
+	    delete_index->FindEntryCandidates(manifest_indexes, data_file.file_path, data_spec_id, data_file.partition_info);
+	result = matching_deletes(candidates);
+#ifdef DEBUG
+	auto linear_result = matching_deletes(provider->GetDeleteFiles(manifest_indexes));
+	D_ASSERT(linear_result.size() == result.size());
+	for (idx_t i = 0; i < result.size(); i++) {
+		D_ASSERT(linear_result[i].file_path == result[i].file_path);
+		D_ASSERT(linear_result[i].content_offset == result[i].content_offset);
+	}
+#endif
 	return result;
 }
 

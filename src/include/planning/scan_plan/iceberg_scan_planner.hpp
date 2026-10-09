@@ -10,6 +10,7 @@
 #include "duckdb/common/types/batched_data_collection.hpp"
 #include "duckdb/function/partition_stats.hpp"
 
+#include "planning/deletes/iceberg_delete_index.hpp"
 #include "planning/deletes/iceberg_delete_planner.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 #include "planning/scan_order/iceberg_scan_order.hpp"
@@ -87,6 +88,7 @@ private:
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	mutable vector<BoundIcebergManifestListEntry> delete_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> delete_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	mutable unique_ptr<IcebergDeleteIndex> delete_index DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable atomic<bool> has_matching_delete_manifests {true};
 	mutable IcebergDataViewCursor data_view_cursor DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);
