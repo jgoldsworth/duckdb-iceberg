@@ -1,0 +1,283 @@
+# name: test/sql/local/iceberg_scans/manifest_read_pushdown.test
+# description: Only the manifests that can match the partition filter are read from storage
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+# pdel (data/persistent/delete_planning, scripts/persistent/delete_planning.py): identity(part), 8 data manifests
+# (part = commit % 4, two commits per partition, ts = 100 * commit + [0, 2]) and 5 delete manifests.
+# Live rows: 16, ids 1 2 11 12 21 22 31 32 40 41 50 51 60 61 70 71.
+
+statement ok
+CALL enable_logging(['FileSystem', 'Iceberg']);
+
+statement ok
+CREATE MACRO opened_manifests() AS TABLE
+SELECT DISTINCT regexp_extract(path, '[^/]*$') AS name FROM duckdb_logs_parsed('FileSystem')
+WHERE op = 'OPEN' AND path LIKE '%.avro' AND name NOT LIKE 'snap-%';
+
+statement ok
+CREATE MACRO selection_log() AS TABLE
+SELECT regexp_extract(message, '(selected_data_manifests=\d+ total_data_manifests=\d+)', 1) AS selection
+FROM duckdb_logs() WHERE message LIKE '%phase=data_manifest_scan_started%';
+
+# Filtered on the partition column: only the data and delete manifests holding partition 2 are opened
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part = 2;
+----
+[21, 22, 60, 61]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=2 total_data_manifests=8
+
+query I
+SELECT count(*) FROM opened;
+----
+4
+
+query II
+SELECT
+    (SELECT count(*) FROM (SELECT name FROM opened EXCEPT
+        SELECT DISTINCT regexp_extract(manifest_path, '[^/]*$') FROM iceberg_metadata('data/persistent/delete_planning/pdel')
+        WHERE file_path LIKE '%/part=2/%')),
+    (SELECT count(*) FROM (SELECT DISTINCT regexp_extract(manifest_path, '[^/]*$') FROM iceberg_metadata('data/persistent/delete_planning/pdel')
+        WHERE file_path LIKE '%/part=2/%' EXCEPT SELECT name FROM opened));
+----
+0	0
+
+statement ok
+DROP TABLE opened;
+
+# Another partition reads a different set of manifests, not "the first one"
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part = 0;
+----
+[1, 2, 40, 41]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=2 total_data_manifests=8
+
+query II
+SELECT
+    (SELECT count(*) FROM (SELECT name FROM opened EXCEPT
+        SELECT DISTINCT regexp_extract(manifest_path, '[^/]*$') FROM iceberg_metadata('data/persistent/delete_planning/pdel')
+        WHERE file_path LIKE '%/part=0/%')),
+    (SELECT count(*) FROM (SELECT DISTINCT regexp_extract(manifest_path, '[^/]*$') FROM iceberg_metadata('data/persistent/delete_planning/pdel')
+        WHERE file_path LIKE '%/part=0/%' EXCEPT SELECT name FROM opened));
+----
+0	0
+
+statement ok
+DROP TABLE opened;
+
+# A predicate that only keeps manifests of partitions 1 and 3 reads exactly those
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part IN (1, 3);
+----
+[11, 12, 31, 32, 50, 51, 70, 71]
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=4 total_data_manifests=8
+
+# Declines to prune: a filter on a non-partition column cannot skip data manifests (8), only the delete manifests
+# of the one surviving file (2) are read
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE ts = 600;
+----
+[60]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=8 total_data_manifests=8
+
+query I
+SELECT count(*) FROM opened;
+----
+10
+
+statement ok
+DROP TABLE opened;
+
+# Declines to prune: no filter reads every manifest
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel');
+----
+[1, 2, 11, 12, 21, 22, 31, 32, 40, 41, 50, 51, 60, 61, 70, 71]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=8 total_data_manifests=8
+
+query I
+SELECT count(*) FROM opened;
+----
+13
+
+statement ok
+DROP TABLE opened;
+
+# hive_partitioned_table: manifest 1 is identity(event_date) only, manifest 2 is identity(event_date, event_type)
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(user_id ORDER BY user_id) FROM iceberg_scan('data/persistent/hive_partitioned_table') WHERE event_date = DATE '2024-01-01';
+----
+[12345]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=1 total_data_manifests=2
+
+query I
+SELECT list(name) FROM opened;
+----
+[8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro]
+
+statement ok
+DROP TABLE opened;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(user_id ORDER BY user_id) FROM iceberg_scan('data/persistent/hive_partitioned_table') WHERE event_date = DATE '2024-01-03';
+----
+[13579, 24680]
+
+statement ok
+CREATE TEMP TABLE opened AS SELECT * FROM opened_manifests();
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=1 total_data_manifests=2
+
+query I
+SELECT list(name) FROM opened;
+----
+[fee93099-6425-4d83-bd7c-0aa646533090-m0.avro]
+
+statement ok
+DROP TABLE opened;
+
+# Declines to prune: event_type is a partition field of the second manifest only, the first has no summary for it
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(user_id ORDER BY user_id) FROM iceberg_scan('data/persistent/hive_partitioned_table') WHERE event_type = 'purchase';
+----
+[67890, 97531]
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=2 total_data_manifests=2
+
+# A manifest whose summary excludes the value is still skipped when the other one cannot be
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM iceberg_scan('data/persistent/hive_partitioned_table') WHERE event_type = 'zzz';
+----
+0
+
+query I
+SELECT * FROM selection_log();
+----
+selected_data_manifests=1 total_data_manifests=2
+
+# One store serves every filtered view of a scan: differently filtered uses of the same scan must each see their own
+# manifests
+statement ok
+CREATE VIEW pdel_view AS SELECT * FROM iceberg_scan('data/persistent/delete_planning/pdel');
+
+query II
+SELECT part, list(id ORDER BY id) FROM (
+    SELECT * FROM pdel_view WHERE part = 1
+    UNION ALL
+    SELECT * FROM pdel_view WHERE part = 2
+) GROUP BY part ORDER BY part;
+----
+1	[11, 12, 50, 51]
+2	[21, 22, 60, 61]
+
+query II
+WITH t AS (SELECT * FROM iceberg_scan('data/persistent/delete_planning/pdel'))
+SELECT a.part, list(DISTINCT b.id ORDER BY b.id) FROM (SELECT * FROM t WHERE part = 3) a JOIN (SELECT * FROM t WHERE part = 0) b ON a.id % 10 = b.id % 10 GROUP BY a.part;
+----
+3	[1, 2, 40, 41]
+
+query II
+SELECT a.part, list(a.id ORDER BY a.id) FROM iceberg_scan('data/persistent/delete_planning/pdel') a
+JOIN (SELECT 2 AS part) b USING (part) GROUP BY a.part;
+----
+2	[21, 22, 60, 61]
+
+query II
+SELECT a.part, list(a.id ORDER BY a.id) FROM iceberg_scan('data/persistent/delete_planning/pdel') a
+JOIN (SELECT unnest([0, 3]) AS part) b USING (part) WHERE a.ts < 500 GROUP BY a.part ORDER BY a.part;
+----
+0	[1, 2, 40, 41]
+3	[31, 32]
+
+statement ok
+PREPARE by_part AS SELECT list(id ORDER BY id) FROM iceberg_scan('data/persistent/delete_planning/pdel') WHERE part = $1;
+
+query I
+EXECUTE by_part(1);
+----
+[11, 12, 50, 51]
+
+query I
+EXECUTE by_part(3);
+----
+[31, 32, 70, 71]
+
+query I
+EXECUTE by_part(1);
+----
+[11, 12, 50, 51]
