@@ -29,12 +29,15 @@ public:
 private:
 	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
+	const unordered_set<int32_t> &GetMappingFieldIds() const;
 
 private:
 	ClientContext &context;
 	const IcebergTableMetadata &metadata;
 	const IcebergTableSchema &schema;
 	const IcebergTableFilters &table_filters;
+	mutable unordered_set<int32_t> mapping_field_ids;
+	mutable bool mapping_field_ids_built = false;
 };
 
 } // namespace duckdb

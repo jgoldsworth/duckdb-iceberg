@@ -58,11 +58,6 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 	auto &partition_spec = partition_spec_it->second;
 	auto &source_to_column_id = schema.GetSourceIdMap();
 
-	unordered_map<uint64_t, idx_t> partition_info_map;
-	for (idx_t i = 0; i < data_file.partition_info.size(); i++) {
-		partition_info_map.emplace(data_file.partition_info[i].field_id, i);
-	}
-
 	for (auto &field : partition_spec.fields) {
 		auto source_it = source_to_column_id.find(field.source_id);
 		if (source_it == source_to_column_id.end()) {
@@ -76,11 +71,13 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 		}
 
 		IcebergPredicateStats stats;
-		auto it = partition_info_map.find(field.partition_field_id);
-		if (it == partition_info_map.end()) {
+		auto it =
+		    std::find_if(data_file.partition_info.begin(), data_file.partition_info.end(),
+		                 [&](const IcebergPartitionInfo &info) { return info.field_id == field.partition_field_id; });
+		if (it == data_file.partition_info.end()) {
 			continue;
 		}
-		auto &partition_val = data_file.partition_info[it->second];
+		auto &partition_val = *it;
 		stats.lower_bound = partition_val.value;
 		stats.upper_bound = partition_val.value;
 		if (partition_val.value.IsNull()) {
@@ -111,16 +108,21 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 	return true;
 }
 
+const unordered_set<int32_t> &IcebergFilePruner::GetMappingFieldIds() const {
+	if (!mapping_field_ids_built) {
+		for (auto &mapping : metadata.mappings) {
+			if (mapping.field_id != NumericLimits<int32_t>::Maximum()) {
+				mapping_field_ids.insert(mapping.field_id);
+			}
+		}
+		mapping_field_ids_built = true;
+	}
+	return mapping_field_ids;
+}
+
 bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
                                           const IcebergManifestEntry &manifest_entry) const {
 	D_ASSERT(table_filters.HasFilters());
-	unordered_set<int32_t> mapping_field_ids;
-	for (auto &mapping : metadata.mappings) {
-		if (mapping.field_id != NumericLimits<int32_t>::Maximum()) {
-			mapping_field_ids.insert(mapping.field_id);
-		}
-	}
-
 	auto &data_file = manifest_entry.data_file;
 	if (!FilePartitionMatchesFilter(data_file, manifest_file)) {
 		return false;
@@ -143,7 +145,7 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 		}
 
 		auto &column_id = column.id;
-		if (!metadata.mappings.empty() && mapping_field_ids.find(column_id) == mapping_field_ids.end()) {
+		if (!metadata.mappings.empty() && GetMappingFieldIds().find(column_id) == GetMappingFieldIds().end()) {
 			continue;
 		}
 
@@ -253,18 +255,16 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &del
 		                            delete_partition_spec.fields.size());
 	}
 
-	unordered_map<uint64_t, reference<const Value>> partition_values;
-	for (auto &partition : data_manifest_entry.data_file.partition_info) {
-		partition_values.emplace(partition.field_id, partition.value);
-	}
-
 	for (idx_t field_idx = 0; field_idx < delete_partition_spec.fields.size(); field_idx++) {
 		auto &field = delete_partition_spec.fields[field_idx];
-		auto partition_value_it = partition_values.find(field.partition_field_id);
-		if (partition_value_it == partition_values.end()) {
+		auto &partition_info = data_manifest_entry.data_file.partition_info;
+		auto partition_value_it =
+		    std::find_if(partition_info.begin(), partition_info.end(),
+		                 [&](const IcebergPartitionInfo &info) { return info.field_id == field.partition_field_id; });
+		if (partition_value_it == partition_info.end()) {
 			return true;
 		}
-		auto &partition_value = partition_value_it->second.get();
+		auto &partition_value = partition_value_it->value;
 		auto &field_summary = field_summaries[field_idx];
 		if (partition_value.IsNull()) {
 			if (!field_summary.contains_null) {

@@ -180,6 +180,7 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
+	IcebergFilePruner file_pruner(context, GetMetadata(), GetSchema(), table_filters);
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
@@ -196,24 +197,24 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 		     data_view_cursor.current_batch_offset++) {
 			auto &manifest_entry = manifest_entries[data_view_cursor.current_batch_offset];
 			auto &data_file = manifest_entry.data_file;
-			auto entry_path = data_file.file_path;
-			if (GetOptions().allow_moved_paths) {
-				entry_path = IcebergUtils::GetFullPath(GetPath(), entry_path, fs);
-			}
-			IcebergPartition partition {manifest_file.partition_spec_id, data_file.partition_info};
-			shared_state->data_file_partitions[entry_path] = partition;
-			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
-			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
+			if (table_filters.HasFilters() && !file_pruner.FileMatchesFilter(manifest_file, manifest_entry)) {
 				continue;
 			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
 				continue;
 			}
+			IcebergPartition partition {manifest_file.partition_spec_id, data_file.partition_info};
+			if (GetOptions().allow_moved_paths) {
+				auto entry_path = IcebergUtils::GetFullPath(GetPath(), data_file.file_path, fs);
+				if (entry_path != data_file.file_path) {
+					shared_state->data_file_partitions[entry_path] = partition;
+				}
+			}
+			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			data_manifest_entries.push_back(bound_entry);
 		}
 		if (data_view_cursor.current_batch_offset >= batch.end_index) {
