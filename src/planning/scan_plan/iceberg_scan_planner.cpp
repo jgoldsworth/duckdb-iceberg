@@ -94,6 +94,7 @@ void IcebergScanPlanner::SetOptions(const IcebergOptions &new_options) {
 void IcebergScanPlanner::SetScanOrder(unique_ptr<RowGroupOrderOptions> order_options) {
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	scan_order.Set(std::move(order_options));
+	scan_order_pending.store(scan_order.IsPending());
 }
 
 void IcebergScanPlanner::DisableServerSidePlanning() {
@@ -225,15 +226,50 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 	return data_manifest_entries[file_id];
 }
 
-void IcebergScanPlanner::EnsureScanOrderApplied(annotated_lock_guard<annotated_mutex> &guard) const {
-	if (!scan_order.IsPending()) {
+void IcebergScanPlanner::PrepareScanOrder() const {
+	if (!scan_order_pending.load()) {
 		return;
 	}
-	idx_t materialized = 0;
-	while (GetDataFile(materialized, guard)) {
-		materialized++;
+	lock_guard<mutex> prepare_guard(scan_order_mutex);
+	if (!scan_order_pending.load()) {
+		return;
 	}
-	scan_order.Apply(context, GetSchema(), has_matching_delete_manifests.load(), data_manifest_entries);
+	vector<BoundIcebergManifestEntry> entries;
+	unique_ptr<RowGroupOrderOptions> options;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		idx_t materialized = 0;
+		while (GetDataFile(materialized, guard)) {
+			materialized++;
+		}
+		entries.reserve(data_manifest_entries.size());
+		for (auto &entry : data_manifest_entries) {
+			entries.push_back(entry);
+		}
+		options = scan_order.CopyOptions();
+	}
+	IcebergScanOrder::Apply(context, GetSchema(), *options, entries,
+	                        [&](const BoundIcebergManifestEntry &entry) { return LiveRowLowerBound(entry); });
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	data_manifest_entries = std::move(entries);
+	scan_order.MarkApplied();
+	scan_order_pending.store(false);
+}
+
+idx_t IcebergScanPlanner::LiveRowLowerBound(const BoundIcebergManifestEntry &entry) const {
+	auto &data_file = entry.entry.data_file;
+	auto record_count = NumericCast<idx_t>(data_file.record_count);
+	if (!has_matching_delete_manifests.load()) {
+		return record_count;
+	}
+	if (HasTransactionData()) {
+		return 0;
+	}
+	auto deleted = IcebergScanStatistics::ExactDeletedRows(data_file.file_path, ResolveApplicableDeleteFiles(entry));
+	if (!deleted || *deleted > record_count) {
+		return 0;
+	}
+	return record_count - *deleted;
 }
 
 IcebergDataFileDescriptor IcebergScanPlanner::CreateDataFileDescriptor(const BoundIcebergManifestEntry &entry) const {
@@ -253,9 +289,9 @@ IcebergDataFileDescriptor IcebergScanPlanner::CreateDataFileDescriptor(const Bou
 }
 
 optional<IcebergDataFileDescriptor> IcebergScanPlanner::GetDataFileDescriptor(idx_t file_id) const {
+	PrepareScanOrder();
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	GetDataFile(file_id, guard);
-	EnsureScanOrderApplied(guard);
 	if (file_id >= data_manifest_entries.size()) {
 		return nullopt;
 	}
@@ -263,12 +299,12 @@ optional<IcebergDataFileDescriptor> IcebergScanPlanner::GetDataFileDescriptor(id
 }
 
 optional<IcebergFileScanTask> IcebergScanPlanner::GetScanTask(idx_t file_id) const {
+	PrepareScanOrder();
 	optional<BoundIcebergManifestEntry> entry;
 	IcebergFileScanTask task;
 	{
 		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 		GetDataFile(file_id, guard);
-		EnsureScanOrderApplied(guard);
 		if (file_id >= data_manifest_entries.size()) {
 			return nullopt;
 		}

@@ -68,7 +68,8 @@ private:
 	IcebergDeletePlanningContext GetDeletePlanningContext() const DUCKDB_REQUIRES(shared_state->lock);
 
 	void InitializeView(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
-	void EnsureScanOrderApplied(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
+	void PrepareScanOrder() const;
+	idx_t LiveRowLowerBound(const BoundIcebergManifestEntry &entry) const;
 	optional_ptr<const BoundIcebergManifestEntry> GetDataFile(idx_t file_id,
 	                                                          annotated_lock_guard<annotated_mutex> &guard) const
 	    DUCKDB_REQUIRES(shared_state->lock);
@@ -95,6 +96,8 @@ private:
 	mutable vector<BoundIcebergManifestListEntry> data_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable IcebergScanOrder scan_order DUCKDB_GUARDED_BY(shared_state->lock);
+	mutable mutex scan_order_mutex;
+	mutable atomic<bool> scan_order_pending {false};
 };
 
 } // namespace duckdb

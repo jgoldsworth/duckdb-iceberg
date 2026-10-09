@@ -8,6 +8,7 @@
 #include "iceberg_logging.hpp"
 
 #include <algorithm>
+#include <functional>
 
 namespace duckdb {
 
@@ -21,7 +22,7 @@ struct IcebergOrderEntry {
 	idx_t entry_idx;
 	Value lower;
 	Value upper;
-	idx_t count;
+	optional<idx_t> live_rows;
 };
 
 } // namespace
@@ -49,14 +50,13 @@ bool IcebergScanOrder::IsPending() const {
 	return options && !applied;
 }
 
-void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &schema,
-                             bool has_matching_delete_manifests, vector<BoundIcebergManifestEntry> &manifest_entries) {
-	if (!options || applied) {
-		return;
-	}
+void IcebergScanOrder::MarkApplied() {
 	applied = true;
+}
 
-	auto &opts = *options;
+void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &schema,
+                             const RowGroupOrderOptions &opts, vector<BoundIcebergManifestEntry> &manifest_entries,
+                             const std::function<idx_t(const BoundIcebergManifestEntry &)> &live_row_count) {
 	if (opts.column_type != OrderByColumnType::NUMERIC || opts.column_idx.HasChildren()) {
 		return;
 	}
@@ -91,12 +91,7 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (null_it == data_file.null_value_counts.end() || null_it->second > 0) {
 			can_prune = false;
 		}
-		order_entries.push_back(
-		    {i, *stats.lower_bound, *stats.upper_bound, NumericCast<idx_t>(data_file.record_count)});
-	}
-
-	if (has_matching_delete_manifests) {
-		can_prune = false;
+		order_entries.push_back({i, *stats.lower_bound, *stats.upper_bound, nullopt});
 	}
 
 	const auto stat_type = opts.order_by;
@@ -122,7 +117,11 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 			idx_t guaranteed = 0;
 			for (idx_t j = 0; j < k; j++) {
 				if (!ScanOrderCompare(opposite(order_entries[j]), frontier, stat_type)) {
-					guaranteed += order_entries[j].count;
+					auto &live_rows = order_entries[j].live_rows;
+					if (!live_rows) {
+						live_rows = live_row_count(manifest_entries[order_entries[j].entry_idx]);
+					}
+					guaranteed += *live_rows;
 				}
 				if (guaranteed >= row_limit) {
 					break;

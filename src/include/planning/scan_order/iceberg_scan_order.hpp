@@ -2,6 +2,8 @@
 
 #include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
 
+#include <functional>
+
 namespace duckdb {
 
 class IcebergTableSchema;
@@ -17,8 +19,11 @@ public:
 	optional_ptr<const RowGroupOrderOptions> GetOptions() const;
 	bool IsPending() const;
 
-	void Apply(ClientContext &context, const IcebergTableSchema &schema, bool has_matching_delete_manifests,
-	           vector<BoundIcebergManifestEntry> &manifest_entries);
+	void MarkApplied();
+
+	static void Apply(ClientContext &context, const IcebergTableSchema &schema, const RowGroupOrderOptions &options,
+	                  vector<BoundIcebergManifestEntry> &manifest_entries,
+	                  const std::function<idx_t(const BoundIcebergManifestEntry &)> &live_row_count);
 
 private:
 	unique_ptr<RowGroupOrderOptions> options;
