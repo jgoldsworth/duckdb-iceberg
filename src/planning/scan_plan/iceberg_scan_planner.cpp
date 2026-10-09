@@ -309,15 +309,40 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 	if (GetMetadata().iceberg_version == 1) {
 		return;
 	}
-	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-	InitializeView(guard);
-	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
-	                 .ExactRowCount();
-	if (!count) {
-		return;
+	vector<BoundIcebergManifestEntry> entries;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		InitializeView(guard);
+		auto count =
+		    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+		        .ExactRowCount();
+		if (count) {
+			PartitionStatistics stats;
+			stats.count = *count;
+			stats.count_type = CountType::COUNT_EXACT;
+			result.push_back(stats);
+			return;
+		}
+		if (!has_matching_delete_manifests.load() || table_filters.HasFilters()) {
+			return;
+		}
+		idx_t file_id = 0;
+		while (auto entry = GetDataFile(file_id, guard)) {
+			entries.push_back(*entry);
+			file_id++;
+		}
+	}
+	idx_t count = 0;
+	for (auto &entry : entries) {
+		auto &data_file = entry.entry.data_file;
+		auto deleted = IcebergScanStatistics::ExactDeletedRows(data_file.file_path, ResolveApplicableDeleteFiles(entry));
+		if (!deleted || data_file.record_count < 0 || *deleted > NumericCast<idx_t>(data_file.record_count)) {
+			return;
+		}
+		count += NumericCast<idx_t>(data_file.record_count) - *deleted;
 	}
 	PartitionStatistics stats;
-	stats.count = *count;
+	stats.count = count;
 	stats.count_type = CountType::COUNT_EXACT;
 	result.push_back(stats);
 }

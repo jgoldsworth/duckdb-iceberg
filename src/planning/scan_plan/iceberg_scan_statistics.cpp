@@ -1,5 +1,7 @@
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
 
+#include "duckdb/common/string_util.hpp"
+
 namespace duckdb {
 
 IcebergScanStatistics::IcebergScanStatistics(const vector<BoundIcebergManifestListEntry> &data_manifests_p,
@@ -54,6 +56,25 @@ optional<idx_t> IcebergScanStatistics::ExactRowCount() const {
 		}
 	}
 	return CountDataRows();
+}
+
+optional<idx_t> IcebergScanStatistics::ExactDeletedRows(const string &data_file_path,
+                                                        const vector<IcebergDeleteFile> &deletes) {
+	if (deletes.empty()) {
+		return 0;
+	}
+	if (deletes.size() > 1) {
+		return nullopt;
+	}
+	auto &delete_file = deletes[0];
+	if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES || delete_file.record_count < 0) {
+		return nullopt;
+	}
+	if (!StringUtil::CIEquals(delete_file.file_format, "puffin") &&
+	    (!delete_file.referenced_data_file || *delete_file.referenced_data_file != data_file_path)) {
+		return nullopt;
+	}
+	return NumericCast<idx_t>(delete_file.record_count);
 }
 
 } // namespace duckdb
