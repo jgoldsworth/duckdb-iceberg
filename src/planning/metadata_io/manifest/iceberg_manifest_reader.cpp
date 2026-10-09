@@ -292,7 +292,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 				}
 			}
 		}
-		result.push_back(entry);
+		result.push_back(std::move(entry));
 	}
 }
 
